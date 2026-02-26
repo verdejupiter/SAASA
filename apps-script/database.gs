@@ -24,9 +24,8 @@
 
 function obtenerConexionSQL() {
   var url = "jdbc:sqlserver://" + CONFIG.azure.server + ":" + CONFIG.azure.port +
-            ";database=" + CONFIG.azure.database +
-            ";encrypt=true;trustServerCertificate=false;" +
-            "hostNameInCertificate=*.database.windows.net;loginTimeout=30;";
+            ";databaseName=" + CONFIG.azure.database +
+            ";encrypt=true;trustServerCertificate=true;loginTimeout=30";
 
   return Jdbc.getConnection(url, CONFIG.azure.user, CONFIG.azure.password);
 }
