@@ -51,7 +51,10 @@
       <label class="text-sm font-medium text-gray-500">Hasta:</label>
       <input type="date" id="fechaHasta" class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-saasa-500">
       <button onclick="cargarDatos()" id="btnConsultar" class="bg-saasa-600 hover:bg-saasa-700 text-white font-semibold px-5 py-2 rounded-lg text-sm transition-colors">
-        Consultar
+        Sincronizar API
+      </button>
+      <button onclick="cargarDesdeDB()" id="btnDesdeDB" class="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-5 py-2 rounded-lg text-sm transition-colors">
+        Cargar desde BD
       </button>
       <button onclick="exportarCSV()" id="btnExportar" class="bg-gray-600 hover:bg-gray-700 text-white font-medium px-4 py-2 rounded-lg text-sm transition-colors hidden">
         Exportar CSV
@@ -136,8 +139,12 @@
           <tbody id="tablaBody">
             <tr>
               <td colspan="7" class="text-center py-16 text-gray-400">
-                <div class="spinner mx-auto mb-4"></div>
-                <div class="text-sm">Cargando datos de asistencia...</div>
+                <div class="text-3xl mb-3">&#128203;</div>
+                <div class="text-sm font-medium">Selecciona las fechas y presiona un botón</div>
+                <div class="text-xs mt-2">
+                  <span class="text-saasa-600 font-semibold">Sincronizar API</span> = datos frescos desde GeoVictoria |
+                  <span class="text-emerald-600 font-semibold">Cargar desde BD</span> = datos guardados (rápido)
+                </div>
               </td>
             </tr>
           </tbody>
@@ -185,12 +192,13 @@
 
 
     // ── Inicialización ──
+    // Pone fechas por defecto (ayer y hoy) sin cargar automáticamente.
+    // El usuario elige: "Sincronizar API" (trae datos frescos) o "Cargar desde BD" (rápido).
     (function() {
       var hoy  = new Date();
       var ayer = new Date(hoy.getTime() - 86400000);
       document.getElementById("fechaDesde").value = fmtDate(ayer);
       document.getElementById("fechaHasta").value = fmtDate(hoy);
-      cargarDatos();
     })();
 
     function fmtDate(d) {
@@ -206,7 +214,7 @@
       var hasta = document.getElementById("fechaHasta").value;
       if (!desde || !hasta) { alert("Selecciona ambas fechas"); return; }
 
-      toggleLoading(true);
+      toggleLoading(true, "Sincronizando con GeoVictoria...", "Procesando usuarios en lotes de 50");
       document.getElementById("btnConsultar").disabled = true;
 
       google.script.run
@@ -223,6 +231,32 @@
           mostrarError("Error de conexión: " + err.message);
         })
         .obtenerDatosDashboard(desde, hasta);
+    }
+
+
+    // ── Cargar desde Base de Datos (sin llamar a GeoVictoria) ──
+    function cargarDesdeDB() {
+      var desde = document.getElementById("fechaDesde").value;
+      var hasta = document.getElementById("fechaHasta").value;
+      if (!desde || !hasta) { alert("Selecciona ambas fechas"); return; }
+
+      toggleLoading(true, "Consultando base de datos...", "Cargando desde Azure MySQL");
+      document.getElementById("btnDesdeDB").disabled = true;
+
+      google.script.run
+        .withSuccessHandler(function(datos) {
+          toggleLoading(false);
+          document.getElementById("btnDesdeDB").disabled = false;
+          if (datos.error) { mostrarError(datos.mensaje); return; }
+          datosGlobal = datos;
+          renderDashboard();
+        })
+        .withFailureHandler(function(err) {
+          toggleLoading(false);
+          document.getElementById("btnDesdeDB").disabled = false;
+          mostrarError("Error de conexión BD: " + err.message);
+        })
+        .obtenerDatosDesdeSQL(desde, hasta);
     }
 
 
@@ -398,8 +432,12 @@
 
 
     // ── Mostrar/Ocultar Loading ──
-    function toggleLoading(show) {
+    function toggleLoading(show, titulo, subtitulo) {
       var el = document.getElementById("loading");
+      if (show && titulo) {
+        el.querySelector("p").textContent = titulo;
+        el.querySelectorAll("p")[1].textContent = subtitulo || "";
+      }
       el.classList.toggle("hidden", !show);
       el.classList.toggle("flex", show);
     }

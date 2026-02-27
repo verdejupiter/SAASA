@@ -28,7 +28,7 @@ var CONFIG = {
     server:   "saasa-mysql.mysql.database.azure.com",
     database: "saasa_asistencia",
     user:     "saasa_admin",
-    password: "ANGELICA2026!",
+    password: "ANGELICA2026%",
     port:     "3306"
   }
 };
