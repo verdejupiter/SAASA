@@ -2,58 +2,63 @@
  * database.gs — Módulo de Persistencia (Repository)
  *
  * Principio SOLID: Single Responsibility
- *   → SOLO se encarga de leer/escribir en Azure SQL Database.
- *   → No procesa datos, no llama APIs externas.
+ *   → SOLO se encarga de leer/escribir en Azure MySQL Database.
  *
  * Principio SOLID: Dependency Inversion
  *   → Depende de CONFIG (abstracción), no de valores hardcodeados.
- *   → Si cambias de Azure SQL a otro motor, solo modificas este archivo.
+ *   → Si cambias de MySQL a otro motor, solo modificas este archivo.
  *
  * Patrón MVC: Model (capa de persistencia / Repository)
  *
- * Tecnología: JDBC nativo de Apps Script
- *   → Apps Script incluye el driver para SQL Server.
- *   → Azure SQL Database es compatible con SQL Server.
- *
- * Nota: Debes permitir las IPs de Google en el firewall de Azure SQL.
- *   → Azure Portal → SQL Database → Firewall → Allow Azure services = ON
+ * Tecnología: JDBC nativo de Apps Script con MySQL
+ *   → Apps Script soporta jdbc:mysql:// para conexiones externas.
+ *   → Azure Database for MySQL es compatible.
  */
 
 
 // ── Conexión ─────────────────────────────────────────────────────────────────
 
 function obtenerConexionSQL() {
-  var url = "jdbc:sqlserver://" + CONFIG.azure.server + ":" + CONFIG.azure.port +
-            ";databaseName=" + CONFIG.azure.database +
-            ";encrypt=true;trustServerCertificate=true;loginTimeout=30";
+  var url = "jdbc:mysql://" + CONFIG.mysql.server + ":" + CONFIG.mysql.port +
+            "/" + CONFIG.mysql.database +
+            "?useSSL=true&requireSSL=true";
 
-  return Jdbc.getConnection(url, CONFIG.azure.user, CONFIG.azure.password);
+  return Jdbc.getConnection(url, CONFIG.mysql.user, CONFIG.mysql.password);
 }
 
 
-// ── Inicializar Tablas (ejecutar una sola vez) ───────────────────────────────
+// ── Inicializar BD y Tablas (ejecutar una sola vez) ──────────────────────────
 
 function inicializarTablas() {
-  var conn = obtenerConexionSQL();
+  // Primero conectar sin BD para crearla
+  var urlSinBD = "jdbc:mysql://" + CONFIG.mysql.server + ":" + CONFIG.mysql.port +
+                 "?useSSL=true&requireSSL=true";
+  var conn = Jdbc.getConnection(urlSinBD, CONFIG.mysql.user, CONFIG.mysql.password);
   var stmt = conn.createStatement();
 
+  stmt.execute("CREATE DATABASE IF NOT EXISTS " + CONFIG.mysql.database);
+  stmt.close();
+  conn.close();
+
+  // Ahora conectar a la BD y crear tablas
+  conn = obtenerConexionSQL();
+  stmt = conn.createStatement();
+
   stmt.execute(
-    "IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'usuarios') " +
-    "CREATE TABLE usuarios (" +
+    "CREATE TABLE IF NOT EXISTS usuarios (" +
     "  identifier VARCHAR(50) PRIMARY KEY," +
     "  nombre VARCHAR(100) NOT NULL," +
     "  apellido VARCHAR(100)," +
     "  grupo VARCHAR(100)," +
     "  email VARCHAR(150)," +
-    "  activo BIT DEFAULT 1," +
-    "  fecha_sync DATETIME DEFAULT GETDATE()" +
+    "  activo BOOLEAN DEFAULT TRUE," +
+    "  fecha_sync DATETIME DEFAULT NOW()" +
     ")"
   );
 
   stmt.execute(
-    "IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'asistencia_diaria') " +
-    "CREATE TABLE asistencia_diaria (" +
-    "  id INT IDENTITY(1,1) PRIMARY KEY," +
+    "CREATE TABLE IF NOT EXISTS asistencia_diaria (" +
+    "  id INT AUTO_INCREMENT PRIMARY KEY," +
     "  identifier VARCHAR(50) NOT NULL," +
     "  fecha DATE NOT NULL," +
     "  turno_nombre VARCHAR(100)," +
@@ -63,14 +68,14 @@ function inicializarTablas() {
     "  hora_salida VARCHAR(20)," +
     "  estado VARCHAR(20) NOT NULL," +
     "  horas_trabajadas VARCHAR(10)," +
-    "  fecha_sync DATETIME DEFAULT GETDATE()," +
-    "  CONSTRAINT UQ_asistencia UNIQUE (identifier, fecha)" +
+    "  fecha_sync DATETIME DEFAULT NOW()," +
+    "  UNIQUE KEY uq_asistencia (identifier, fecha)," +
+    "  FOREIGN KEY (identifier) REFERENCES usuarios(identifier)" +
     ")"
   );
 
   stmt.execute(
-    "IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'resumen_diario') " +
-    "CREATE TABLE resumen_diario (" +
+    "CREATE TABLE IF NOT EXISTS resumen_diario (" +
     "  fecha DATE PRIMARY KEY," +
     "  programados INT DEFAULT 0," +
     "  asistieron INT DEFAULT 0," +
@@ -78,13 +83,13 @@ function inicializarTablas() {
     "  pendientes INT DEFAULT 0," +
     "  porcentaje DECIMAL(5,2) DEFAULT 0," +
     "  total INT DEFAULT 0," +
-    "  fecha_sync DATETIME DEFAULT GETDATE()" +
+    "  fecha_sync DATETIME DEFAULT NOW()" +
     ")"
   );
 
   stmt.close();
   conn.close();
-  Logger.log("Tablas inicializadas en Azure SQL");
+  Logger.log("Base de datos y tablas inicializadas en Azure MySQL");
 }
 
 
@@ -97,21 +102,20 @@ function guardarEnSQL(resultado, usuarios) {
     guardarUsuarios(conn, usuarios);
     guardarAsistencia(conn, resultado.detallePorDia);
     guardarResumen(conn, resultado.resumenPorDia);
-    Logger.log("Datos guardados en Azure SQL");
+    Logger.log("Datos guardados en Azure MySQL");
   } finally {
-    conn.close();  // Siempre cerrar la conexión (Clean Code: manejo de recursos)
+    conn.close();
   }
 }
 
 
-// ── Guardar Usuarios ─────────────────────────────────────────────────────────
+// ── Guardar Usuarios (INSERT ... ON DUPLICATE KEY UPDATE) ────────────────────
 
 function guardarUsuarios(conn, usuarios) {
-  var sql = "MERGE INTO usuarios AS t " +
-            "USING (SELECT ? AS identifier, ? AS nombre, ? AS apellido, ? AS grupo, ? AS email) AS s " +
-            "ON t.identifier = s.identifier " +
-            "WHEN MATCHED THEN UPDATE SET nombre=s.nombre, apellido=s.apellido, grupo=s.grupo, email=s.email, activo=1, fecha_sync=GETDATE() " +
-            "WHEN NOT MATCHED THEN INSERT (identifier,nombre,apellido,grupo,email) VALUES (s.identifier,s.nombre,s.apellido,s.grupo,s.email);";
+  var sql = "INSERT INTO usuarios (identifier, nombre, apellido, grupo, email, activo, fecha_sync) " +
+            "VALUES (?, ?, ?, ?, ?, TRUE, NOW()) " +
+            "ON DUPLICATE KEY UPDATE nombre=VALUES(nombre), apellido=VALUES(apellido), " +
+            "grupo=VALUES(grupo), email=VALUES(email), activo=TRUE, fecha_sync=NOW()";
 
   var stmt = conn.prepareStatement(sql);
 
@@ -133,17 +137,12 @@ function guardarUsuarios(conn, usuarios) {
 // ── Guardar Asistencia Diaria ────────────────────────────────────────────────
 
 function guardarAsistencia(conn, detallePorDia) {
-  var sql = "MERGE INTO asistencia_diaria AS t " +
-            "USING (SELECT ? AS identifier, ? AS fecha, ? AS turno_nombre, ? AS turno_inicio, " +
-            "? AS turno_fin, ? AS hora_entrada, ? AS hora_salida, ? AS estado, ? AS horas_trabajadas) AS s " +
-            "ON t.identifier = s.identifier AND t.fecha = s.fecha " +
-            "WHEN MATCHED THEN UPDATE SET turno_nombre=s.turno_nombre, turno_inicio=s.turno_inicio, " +
-            "turno_fin=s.turno_fin, hora_entrada=s.hora_entrada, hora_salida=s.hora_salida, " +
-            "estado=s.estado, horas_trabajadas=s.horas_trabajadas, fecha_sync=GETDATE() " +
-            "WHEN NOT MATCHED THEN INSERT (identifier,fecha,turno_nombre,turno_inicio,turno_fin," +
-            "hora_entrada,hora_salida,estado,horas_trabajadas) " +
-            "VALUES (s.identifier,s.fecha,s.turno_nombre,s.turno_inicio,s.turno_fin," +
-            "s.hora_entrada,s.hora_salida,s.estado,s.horas_trabajadas);";
+  var sql = "INSERT INTO asistencia_diaria (identifier, fecha, turno_nombre, turno_inicio, " +
+            "turno_fin, hora_entrada, hora_salida, estado, horas_trabajadas, fecha_sync) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) " +
+            "ON DUPLICATE KEY UPDATE turno_nombre=VALUES(turno_nombre), turno_inicio=VALUES(turno_inicio), " +
+            "turno_fin=VALUES(turno_fin), hora_entrada=VALUES(hora_entrada), hora_salida=VALUES(hora_salida), " +
+            "estado=VALUES(estado), horas_trabajadas=VALUES(horas_trabajadas), fecha_sync=NOW()";
 
   var stmt = conn.prepareStatement(sql);
 
@@ -172,15 +171,12 @@ function guardarAsistencia(conn, detallePorDia) {
 // ── Guardar Resumen Diario ───────────────────────────────────────────────────
 
 function guardarResumen(conn, resumenPorDia) {
-  var sql = "MERGE INTO resumen_diario AS t " +
-            "USING (SELECT ? AS fecha, ? AS programados, ? AS asistieron, ? AS faltaron, " +
-            "? AS pendientes, ? AS porcentaje, ? AS total) AS s " +
-            "ON t.fecha = s.fecha " +
-            "WHEN MATCHED THEN UPDATE SET programados=s.programados, asistieron=s.asistieron, " +
-            "faltaron=s.faltaron, pendientes=s.pendientes, porcentaje=s.porcentaje, " +
-            "total=s.total, fecha_sync=GETDATE() " +
-            "WHEN NOT MATCHED THEN INSERT (fecha,programados,asistieron,faltaron,pendientes,porcentaje,total) " +
-            "VALUES (s.fecha,s.programados,s.asistieron,s.faltaron,s.pendientes,s.porcentaje,s.total);";
+  var sql = "INSERT INTO resumen_diario (fecha, programados, asistieron, faltaron, " +
+            "pendientes, porcentaje, total, fecha_sync) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, NOW()) " +
+            "ON DUPLICATE KEY UPDATE programados=VALUES(programados), asistieron=VALUES(asistieron), " +
+            "faltaron=VALUES(faltaron), pendientes=VALUES(pendientes), porcentaje=VALUES(porcentaje), " +
+            "total=VALUES(total), fecha_sync=NOW()";
 
   var stmt = conn.prepareStatement(sql);
 
@@ -201,7 +197,7 @@ function guardarResumen(conn, resumenPorDia) {
 }
 
 
-// ── Leer Resumen desde SQL ───────────────────────────────────────────────────
+// ── Leer Resumen desde MySQL ─────────────────────────────────────────────────
 
 function leerResumenSQL(fechaDesde, fechaHasta) {
   var conn = obtenerConexionSQL();
@@ -232,12 +228,12 @@ function leerResumenSQL(fechaDesde, fechaHasta) {
 }
 
 
-// ── Leer Detalle desde SQL ───────────────────────────────────────────────────
+// ── Leer Detalle desde MySQL ─────────────────────────────────────────────────
 
 function leerDetalleSQL(fechaDesde, fechaHasta) {
   var conn = obtenerConexionSQL();
   var stmt = conn.prepareStatement(
-    "SELECT a.fecha, a.identifier, u.nombre + ' ' + u.apellido AS nombre, " +
+    "SELECT a.fecha, a.identifier, CONCAT(u.nombre, ' ', u.apellido) AS nombre, " +
     "a.turno_nombre, a.turno_inicio, a.turno_fin, a.hora_entrada, a.hora_salida, " +
     "a.estado, a.horas_trabajadas " +
     "FROM asistencia_diaria a LEFT JOIN usuarios u ON a.identifier = u.identifier " +

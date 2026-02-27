@@ -24,12 +24,12 @@ var CONFIG = {
     apiKey:    "abd882",
     apiSecret: "84891b1b"
   },
-  azure: {
-    server:   "saasa-server.database.windows.net",
-    database: "saasa-bd",
+  mysql: {
+    server:   "saasa-mysql.mysql.database.azure.com",
+    database: "saasa_asistencia",
     user:     "saasa_admin",
-    password: "ANGELICA2026%",
-    port:     "1433"
+    password: "ANGELICA2026!",
+    port:     "3306"
   }
 };
 
