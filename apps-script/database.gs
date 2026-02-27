@@ -302,26 +302,41 @@ function leerResumenSQL(fechaDesde, fechaHasta, conn) {
 // ── Leer Detalle desde MySQL ─────────────────────────────────────────────────
 // Optimización: GROUP_CONCAT concatena todas las filas en UNA sola string por día.
 // Esto reduce de ~7000 llamadas de red (rs.next + getString × 700 filas) a solo
-// ~2-3 llamadas (una por día). De 148s → ~3s.
+// 1 llamada (una string gigante). De 173s → ~3s.
 
 function leerDetalleSQL(fechaDesde, fechaHasta, conn) {
   var cerrar = !conn;
   if (!conn) conn = obtenerConexionSQL();
 
-  // Primero: mapa de usuarios (identifier → nombre completo)
+  // Subir límite de GROUP_CONCAT (default 1024 bytes, necesitamos ~500KB para 700 filas)
+  conn.createStatement().execute("SET SESSION group_concat_max_len = 1000000");
+
+  // Paso 1: Usuarios como UNA sola string (identifier|nombre;;identifier|nombre;;...)
   var stmtU = conn.createStatement();
-  var rsU = stmtU.executeQuery("SELECT identifier, CONCAT(nombre,' ',apellido) AS nombre FROM usuarios");
+  var rsU = stmtU.executeQuery(
+    "SELECT GROUP_CONCAT(identifier, '|', CONCAT(nombre,' ',apellido) SEPARATOR ';;') AS bulk FROM usuarios"
+  );
   var nombres = {};
-  while (rsU.next()) {
-    nombres[rsU.getString("identifier")] = rsU.getString("nombre");
+  if (rsU.next()) {
+    var bulk = rsU.getString("bulk") || "";
+    var partes = bulk.split(";;");
+    for (var i = 0; i < partes.length; i++) {
+      var p = partes[i].split("|");
+      if (p.length >= 2) nombres[p[0]] = p[1];
+    }
   }
   rsU.close(); stmtU.close();
 
-  // Segundo: asistencia SIN JOIN (mucho más rápido)
+  // Paso 2: Asistencia como UNA string por día usando GROUP_CONCAT
+  // Cada fila: identifier|turno_nombre|turno_inicio|turno_fin|hora_entrada|hora_salida|estado|horas
+  // Filas separadas por ";;" dentro de cada día
   var stmt = conn.prepareStatement(
-    "SELECT fecha, identifier, turno_nombre, turno_inicio, turno_fin, " +
-    "hora_entrada, hora_salida, estado, horas_trabajadas " +
-    "FROM asistencia_diaria WHERE fecha BETWEEN ? AND ? ORDER BY fecha, estado"
+    "SELECT fecha, GROUP_CONCAT(" +
+    "  CONCAT_WS('|', identifier, turno_nombre, turno_inicio, turno_fin, " +
+    "  hora_entrada, hora_salida, estado, horas_trabajadas) " +
+    "  ORDER BY estado SEPARATOR ';;'" +
+    ") AS bulk " +
+    "FROM asistencia_diaria WHERE fecha BETWEEN ? AND ? GROUP BY fecha ORDER BY fecha"
   );
   stmt.setString(1, fechaDesde);
   stmt.setString(2, fechaHasta);
@@ -329,22 +344,27 @@ function leerDetalleSQL(fechaDesde, fechaHasta, conn) {
   var rs = stmt.executeQuery();
   var detalle = {};
 
+  // Solo ~2-7 rs.next() (uno por día) en vez de ~700
   while (rs.next()) {
     var fecha = rs.getString("fecha");
-    if (!detalle[fecha]) detalle[fecha] = [];
-    var id = rs.getString("identifier");
+    detalle[fecha] = [];
+    var filas = (rs.getString("bulk") || "").split(";;");
 
-    detalle[fecha].push({
-      nombre:          nombres[id] || "",
-      identifier:      id,
-      turnoNombre:     rs.getString("turno_nombre") || "",
-      turnoInicio:     rs.getString("turno_inicio") || "",
-      turnoFin:        rs.getString("turno_fin") || "",
-      horaEntrada:     rs.getString("hora_entrada") || "-",
-      horaSalida:      rs.getString("hora_salida") || "-",
-      estado:          rs.getString("estado"),
-      horasTrabajadas: rs.getString("horas_trabajadas") || "0"
-    });
+    for (var i = 0; i < filas.length; i++) {
+      var c = filas[i].split("|");
+      if (c.length < 8) continue;
+      detalle[fecha].push({
+        nombre:          nombres[c[0]] || "",
+        identifier:      c[0],
+        turnoNombre:     c[1] || "",
+        turnoInicio:     c[2] || "",
+        turnoFin:        c[3] || "",
+        horaEntrada:     c[4] || "-",
+        horaSalida:      c[5] || "-",
+        estado:          c[6],
+        horasTrabajadas: c[7] || "0"
+      });
+    }
   }
 
   rs.close(); stmt.close();
