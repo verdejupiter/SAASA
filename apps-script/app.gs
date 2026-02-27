@@ -43,12 +43,14 @@ function doGet() {
 }
 
 
-// ── Función Principal del Dashboard (llamada desde index.html) ───────────────
+// ── Sincronizar: API → BD → Dashboard ────────────────────────────────────────
 // Patrón Facade: una sola función expuesta al frontend que orquesta todo
+// Flujo: GeoVictoria API → procesar → guardar en Azure MySQL → leer de BD → mostrar
+// El dashboard SIEMPRE muestra datos desde la BD (única fuente de verdad)
 
 function obtenerDatosDashboard(fechaDesde, fechaHasta) {
   try {
-    Logger.log("=== DASHBOARD: " + fechaDesde + " al " + fechaHasta + " ===");
+    Logger.log("=== SINCRONIZAR API → BD: " + fechaDesde + " al " + fechaHasta + " ===");
 
     // Paso 1 → Usuarios activos del grupo (OAuth 1.0)
     var usuarios = obtenerUsuarios();
@@ -70,22 +72,25 @@ function obtenerDatosDashboard(fechaDesde, fechaHasta) {
 
     // Paso 4 → Procesar y clasificar (data.gs)
     var resultado = procesarDatos(datosAPI);
-    resultado.error = false;
     resultado.totalUsuarios = usuarios.length;
-    resultado.fechaActualizacion = Utilities.formatDate(
-      new Date(), "America/Lima", "dd/MM/yyyy HH:mm"
-    );
 
-    // Paso 5 → Persistir en Azure SQL (database.gs)
-    try {
-      guardarEnSQL(resultado, usuarios);
-      resultado.fuenteDatos = "API GeoVictoria → Azure SQL";
-    } catch (e) {
-      Logger.log("Aviso: sin persistencia SQL: " + e.message);
-      resultado.fuenteDatos = "API GeoVictoria (sin persistencia)";
-    }
+    // Paso 5 → Persistir en Azure MySQL (database.gs)
+    guardarEnSQL(resultado, usuarios);
+    Logger.log("Datos guardados en Azure MySQL. Leyendo desde BD...");
 
-    return resultado;
+    // Paso 6 → Leer desde BD (única fuente de verdad para el dashboard)
+    var conn = obtenerConexionSQL();
+    var desdeBD = {
+      error: false,
+      resumenPorDia:      leerResumenSQL(fechaDesde, fechaHasta, conn),
+      detallePorDia:      leerDetalleSQL(fechaDesde, fechaHasta, conn),
+      totalUsuarios:      usuarios.length,
+      fechaActualizacion: Utilities.formatDate(new Date(), "America/Lima", "dd/MM/yyyy HH:mm"),
+      fuenteDatos:        "API GeoVictoria → Azure MySQL → Dashboard"
+    };
+    conn.close();
+
+    return desdeBD;
 
   } catch (e) {
     Logger.log("Error: " + e.message);
