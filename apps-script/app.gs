@@ -104,19 +104,31 @@ function obtenerDatosDashboard(fechaDesde, fechaHasta) {
 
 function obtenerDatosDesdeSQL(fechaDesde, fechaHasta) {
   try {
+    var t0 = new Date().getTime();
     var conn = obtenerConexionSQL();
+    Logger.log("Conexión JDBC: " + (new Date().getTime() - t0) + "ms");
+
+    var t1 = new Date().getTime();
     var resumenes = leerResumenSQL(fechaDesde, fechaHasta, conn);
+    Logger.log("Query resumen: " + (new Date().getTime() - t1) + "ms → " + resumenes.length + " días");
+
     if (!resumenes || resumenes.length === 0) {
       conn.close();
       return { error: true, mensaje: "No hay datos guardados para ese rango" };
     }
+
+    var t2 = new Date().getTime();
     var detalle = leerDetalleSQL(fechaDesde, fechaHasta, conn);
+    Logger.log("Query detalle: " + (new Date().getTime() - t2) + "ms");
+
     conn.close();
+    Logger.log("TOTAL carga BD: " + (new Date().getTime() - t0) + "ms");
+
     return {
       error: false,
       resumenPorDia: resumenes,
       detallePorDia: detalle,
-      fechaActualizacion: "Datos desde Azure MySQL (caché)",
+      fechaActualizacion: Utilities.formatDate(new Date(), "America/Lima", "dd/MM/yyyy HH:mm"),
       fuenteDatos: "Azure MySQL Database"
     };
   } catch (e) {
