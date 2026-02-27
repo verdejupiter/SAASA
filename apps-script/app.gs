@@ -94,20 +94,25 @@ function obtenerDatosDashboard(fechaDesde, fechaHasta) {
 }
 
 
-// ── Carga desde Azure SQL (sin llamar a GeoVictoria) ─────────────────────────
+// ── Carga desde Azure MySQL (sin llamar a GeoVictoria) ───────────────────────
+// Optimización: UNA sola conexión JDBC para ambas consultas (resumen + detalle)
 
 function obtenerDatosDesdeSQL(fechaDesde, fechaHasta) {
   try {
-    var resumenes = leerResumenSQL(fechaDesde, fechaHasta);
+    var conn = obtenerConexionSQL();
+    var resumenes = leerResumenSQL(fechaDesde, fechaHasta, conn);
     if (!resumenes || resumenes.length === 0) {
+      conn.close();
       return { error: true, mensaje: "No hay datos guardados para ese rango" };
     }
+    var detalle = leerDetalleSQL(fechaDesde, fechaHasta, conn);
+    conn.close();
     return {
       error: false,
       resumenPorDia: resumenes,
-      detallePorDia: leerDetalleSQL(fechaDesde, fechaHasta),
-      fechaActualizacion: "Datos desde Azure SQL (caché)",
-      fuenteDatos: "Azure SQL Database"
+      detallePorDia: detalle,
+      fechaActualizacion: "Datos desde Azure MySQL (caché)",
+      fuenteDatos: "Azure MySQL Database"
     };
   } catch (e) {
     return { error: true, mensaje: e.message };

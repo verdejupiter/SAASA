@@ -219,10 +219,58 @@ function esc(val) {
 }
 
 
+// ── Verificar datos en BD (ejecutar desde el editor para demostrar persistencia) ──
+
+function verificarDatosSQL() {
+  var conn = obtenerConexionSQL();
+  var stmt = conn.createStatement();
+
+  var rs = stmt.executeQuery("SELECT COUNT(*) AS total FROM usuarios");
+  rs.next();
+  Logger.log("=== VERIFICACIÓN DE BASE DE DATOS ===");
+  Logger.log("Usuarios en BD: " + rs.getInt("total"));
+
+  rs = stmt.executeQuery("SELECT COUNT(*) AS total FROM asistencia_diaria");
+  rs.next();
+  Logger.log("Registros de asistencia: " + rs.getInt("total"));
+
+  rs = stmt.executeQuery("SELECT COUNT(*) AS total FROM resumen_diario");
+  rs.next();
+  Logger.log("Días con resumen: " + rs.getInt("total"));
+
+  rs = stmt.executeQuery(
+    "SELECT fecha, programados, asistieron, faltaron, CONCAT(porcentaje,'%') AS pct " +
+    "FROM resumen_diario ORDER BY fecha DESC LIMIT 7"
+  );
+  Logger.log("\n── Últimos 7 días de resumen ──");
+  while (rs.next()) {
+    Logger.log(rs.getString("fecha") + " | Prog:" + rs.getInt("programados") +
+      " Asist:" + rs.getInt("asistieron") + " Falt:" + rs.getInt("faltaron") +
+      " → " + rs.getString("pct"));
+  }
+
+  rs = stmt.executeQuery(
+    "SELECT CONCAT(u.nombre,' ',u.apellido) AS nombre, a.estado, a.hora_entrada " +
+    "FROM asistencia_diaria a JOIN usuarios u ON a.identifier=u.identifier " +
+    "ORDER BY a.fecha DESC, a.estado LIMIT 10"
+  );
+  Logger.log("\n── Últimos 10 registros de asistencia ──");
+  while (rs.next()) {
+    Logger.log(rs.getString("nombre") + " | " + rs.getString("estado") +
+      " | Entrada: " + rs.getString("hora_entrada"));
+  }
+
+  rs.close(); stmt.close(); conn.close();
+  Logger.log("\n=== FIN VERIFICACIÓN ===");
+}
+
+
 // ── Leer Resumen desde MySQL ─────────────────────────────────────────────────
 
-function leerResumenSQL(fechaDesde, fechaHasta) {
-  var conn = obtenerConexionSQL();
+function leerResumenSQL(fechaDesde, fechaHasta, conn) {
+  var cerrar = !conn;
+  if (!conn) conn = obtenerConexionSQL();
+
   var stmt = conn.prepareStatement(
     "SELECT fecha, programados, asistieron, faltaron, pendientes, porcentaje, total " +
     "FROM resumen_diario WHERE fecha BETWEEN ? AND ? ORDER BY fecha"
@@ -245,15 +293,18 @@ function leerResumenSQL(fechaDesde, fechaHasta) {
     });
   }
 
-  rs.close(); stmt.close(); conn.close();
+  rs.close(); stmt.close();
+  if (cerrar) conn.close();
   return resultados;
 }
 
 
 // ── Leer Detalle desde MySQL ─────────────────────────────────────────────────
 
-function leerDetalleSQL(fechaDesde, fechaHasta) {
-  var conn = obtenerConexionSQL();
+function leerDetalleSQL(fechaDesde, fechaHasta, conn) {
+  var cerrar = !conn;
+  if (!conn) conn = obtenerConexionSQL();
+
   var stmt = conn.prepareStatement(
     "SELECT a.fecha, a.identifier, CONCAT(u.nombre, ' ', u.apellido) AS nombre, " +
     "a.turno_nombre, a.turno_inicio, a.turno_fin, a.hora_entrada, a.hora_salida, " +
@@ -284,6 +335,7 @@ function leerDetalleSQL(fechaDesde, fechaHasta) {
     });
   }
 
-  rs.close(); stmt.close(); conn.close();
+  rs.close(); stmt.close();
+  if (cerrar) conn.close();
   return detalle;
 }
